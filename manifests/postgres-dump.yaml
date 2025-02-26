@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-copy-data
+data:
+  copy_data.sh: |
+    #!/bin/bash
+    set -e
+
+    echo "Attempting to dump all data from the source database and restore it to the destination database"
+
+    # Dump all data from the source database
+    PGPASSWORD=$SRC_PASSWORD pg_dumpall -h $SRC_HOST \
+    -p $SRC_PORT \
+    -U $SRC_USER \
+    --inserts \
+    --no-role-passwords \
+    --disable-triggers > /tmp/all_data.sql
+
+    echo "Data dumped successfully"
+    echo "Restoring data to the destination database"
+
+    # Restore all data to the destination database
+    PGPASSWORD=$DEST_PASSWORD psql -h $DEST_HOST -p $DEST_PORT -U $DEST_USER -d $DEST_DB -f /tmp/all_data.sql
+
+    echo "Data restored successfully"
+
+    # Clean up
+    rm /tmp/all_data.sql
+
+    echo "Data migration complete"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: postgres-data-migration
+spec:
+  template:
+    spec:
+      containers:
+      - name: postgres-data-migration
+        image: postgres:latest
+        command:
+        - sh
+        - -c
+        - /tmp/copy_data.sh
+        env:
+        - name: SRC_HOST
+          value: "host"
+        - name: SRC_PORT
+          value: "5432"
+        - name: SRC_USER
+          value: "dummy"
+        - name: SRC_PASSWORD
+          value: "dummy"
+        - name: DEST_HOST
+          value: "host"
+        - name: DEST_PORT
+          value: "5432"
+        - name: DEST_USER
+          value: "dummy"
+        - name: DEST_PASSWORD
+          value: "dummy"
+        - name: DEST_DB
+          value: "postgres"
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+        volumeMounts:
+        - name: config-volume
+          mountPath: /tmp/copy_data.sh
+          subPath: copy_data.sh
+      volumes:
+      - name: config-volume
+        configMap:
+          name: postgres-copy-data
+          defaultMode: 511
+      restartPolicy: Never
+  backoffLimit: 4

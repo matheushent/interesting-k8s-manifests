@@ -1,0 +1,62 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: db-recovery-script
+data:
+  script.sh: |
+    #!/bin/bash
+    IS_IN_RECOVERY=`PGPASSWORD=$PASSWORD psql -U $USER -h $HOST -p $PORT -w -d $DATABASE -t -c 'SELECT pg_is_in_recovery()'`
+
+    # trim whitespace
+    IS_IN_RECOVERY=$(echo $IS_IN_RECOVERY | xargs)
+
+    if [[ "$IS_IN_RECOVERY" == "t" ]]; then
+      echo "Database is in recovery mode"
+      PGPASSWORD=$PASSWORD psql -U $USER -h $HOST -p $PORT -w -d $DATABASE -c 'SELECT pg_promote()'
+    else
+      echo "Database is not in recovery mode"
+    fi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: db-recovery
+spec:
+  schedule: "* * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          volumes:
+          - name: db-recovery
+            configMap:
+              name: db-recovery
+              defaultMode: 365
+          containers:
+          - name: psql-runner
+            image: postgres:latest
+            volumeMounts:
+            - name: db-recovery
+              mountPath: /tmp/script.sh
+              subPath: script.sh
+            env:
+            - name: HOST
+              value: "dummy"
+            - name: PORT
+              value: "5432"
+            - name: DATABASE
+              value: "dummy"
+            - name: USER
+              value: "dummy-user"
+            - name: PASSWORD
+              value: "dummy"
+            command:
+            - sh
+            - -c
+            - /tmp/script.sh
+            livenessProbe:
+              exec:
+                command: [ "pg_isready", "-h", "$PGHOST", "-p", "$PGPORT" ]
+              initialDelaySeconds: 1
+              periodSeconds: 2
+          restartPolicy: OnFailure
